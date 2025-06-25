@@ -1,116 +1,86 @@
-import React, { useState, useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import React, { useState, useMemo, useEffect } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, AreaChart, Area } from 'recharts';
 import Papa from 'papaparse';
 import './App.css';
 
-// Sample data for demo
-const sampleRaceData = [
-    { runner: 'Ruth', year: 2023, pace: '0:08:59', event: '5' },
-    { runner: 'Ruth', year: 2024, pace: '0:08:03', event: '5' },
-    { runner: 'Ruth', year: 2025, pace: '0:07:44', event: '5' },
-    { runner: 'Maria', year: 2023, pace: '0:07:33', event: '5' },
-    { runner: 'Maria', year: 2024, pace: '0:11:57', event: '5' },
-    { runner: 'Maria', year: 2025, pace: '0:10:57', event: '5' },
-    { runner: 'Eoin', year: 2023, pace: '0:07:33', event: '5' },
-    { runner: 'Eoin', year: 2024, pace: '0:07:54', event: '5' },
-    { runner: 'Eoin', year: 2025, pace: '0:07:59', event: '5' },
-    { runner: 'Jim', year: 2023, pace: '0:07:47', event: '5' },
-    { runner: 'Jim', year: 2024, pace: '0:07:59', event: '5' },
-    { runner: 'Patrick', year: 2024, pace: '0:07:43', event: '5' },
-    { runner: 'Patrick', year: 2023, pace: '0:07:41', event: '5' },
-    { runner: 'Murt', year: 2023, pace: '0:11:10', event: '5' },
-    { runner: 'Sarah', year: 2025, pace: '0:19:10', event: '3.67' },
-    { runner: 'Dara', year: 2023, pace: '0:11:10', event: '5' },
-];
-
 const colors = ['#8884d8', '#82ca9d', '#ffc658', '#ff7300', '#8dd1e1', '#d084d0', '#87d068', '#ffb347', '#ff6b6b', '#4ecdc4'];
+const MILE_TO_KM = 1.60934;
 
-// CHANGED: Helper function to convert 'HH:MM:SS' or 'MM:SS' strings to total seconds for calculations.
-const paceToSeconds = (paceStr) => {
-  if (!paceStr || typeof paceStr !== 'string') return NaN;
-  const parts = paceStr.split(':').map(Number);
+const timeToTotalSeconds = (timeStr) => {
+  if (!timeStr || typeof timeStr !== 'string') return NaN;
+  const parts = timeStr.split(':').map(Number);
   if (parts.some(isNaN)) return NaN;
-  
   let seconds = 0;
-  if (parts.length === 3) { // HH:MM:SS
-    seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
-  } else if (parts.length === 2) { // MM:SS
-    seconds = parts[0] * 60 + parts[1];
-  } else {
-      return NaN;
-  }
+  if (parts.length === 3) { seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]; }
+  else if (parts.length === 2) { seconds = parts[0] * 60 + parts[1]; }
+  else { return NaN; }
   return seconds;
 };
 
-// CHANGED: Helper function to format total seconds back into a 'MM:SS' string for display.
-const secondsToPace = (totalSeconds) => {
-  if (isNaN(totalSeconds) || totalSeconds === null) return 'N/A';
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.round(totalSeconds % 60);
+const secondsToPace = (totalSecondsPerMile, unit = 'mile') => {
+  if (isNaN(totalSecondsPerMile) || totalSecondsPerMile === null) return 'N/A';
+  let convertedSeconds = totalSecondsPerMile;
+  if (unit === 'km') {
+    convertedSeconds /= MILE_TO_KM;
+  }
+  const minutes = Math.floor(Math.abs(convertedSeconds) / 60);
+  const seconds = Math.round(Math.abs(convertedSeconds) % 60);
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 };
 
-// This function processes the raw data (from sample or CSV) into a usable format.
 const processData = (data) => {
   return data
-    // CHANGED: Filter for rows that have a 'pace' value instead of 'time'.
-    .filter(row => row.runner && row.year && row.pace)
-    .map(row => ({
-      runner: String(row.runner).trim(),
-      year: parseInt(row.year),
-      // CHANGED: Keep the original pace string and add a calculated 'paceInSeconds' field.
-      pace: String(row.pace).trim(),
-      paceInSeconds: paceToSeconds(String(row.pace).trim()),
-      event: row.event ? String(row.event).trim() : '5K'
-    }))
-    // CHANGED: Ensure the year and the calculated paceInSeconds are valid numbers.
+    .filter(row => row.runner && row.year && row.time && row.event)
+    .map(row => {
+      const totalSeconds = timeToTotalSeconds(String(row.time).trim());
+      const distance = parseFloat(row.event);
+      if (isNaN(totalSeconds) || isNaN(distance) || distance === 0) {
+          return { ...row, paceInSeconds: NaN };
+      }
+      const paceInSecondsPerMile = totalSeconds / distance;
+      return {
+        runner: String(row.runner).trim(),
+        year: parseInt(row.year),
+        paceInSeconds: paceInSecondsPerMile,
+        event: String(row.event).trim()
+      }
+    })
     .filter(row => !isNaN(row.year) && !isNaN(row.paceInSeconds));
 };
 
 function App() {
-  // CHANGED: Process the initial sample data using our new function.
-  const [raceData, setRaceData] = useState(() => processData(sampleRaceData));
+  const [raceData, setRaceData] = useState([]); 
   const [selectedRunners, setSelectedRunners] = useState(new Set());
   const [selectedYear, setSelectedYear] = useState('all');
   const [viewMode, setViewMode] = useState('trends');
-  const [isLoading, setIsLoading] = useState(false);
+  const [paceUnit, setPaceUnit] = useState('mile');
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const handleFileUpload = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    setIsLoading(true);
-    setError(null);
-
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
+  useEffect(() => {
+    const csvFilePath = `${process.env.PUBLIC_URL}/race_data.csv`;
+    Papa.parse(csvFilePath, {
+      download: true, header: true, skipEmptyLines: true,
       complete: (results) => {
         try {
-          // CHANGED: Use the central processing function.
           const cleanedData = processData(results.data);
-
           if (cleanedData.length === 0) {
-            setError('No valid data found. Check your CSV format (runner, year, pace, event).');
-            setIsLoading(false);
-            return;
+            setError('No valid data found. Check race_data.csv for runner, year, time, and event columns.');
+            setIsLoading(false); return;
           }
-
           setRaceData(cleanedData);
-          setSelectedRunners(new Set());
           setIsLoading(false);
         } catch (err) {
           setError('Error processing CSV file: ' + err.message);
           setIsLoading(false);
         }
       },
-      error: (error) => {
-        setError('Error reading CSV file: ' + error.message);
+      error: (err) => {
+        setError(`Could not load race_data.csv. Ensure it's in the 'public' folder. Error: ${err.message}`);
         setIsLoading(false);
       }
     });
-  };
+  }, []);
 
   const runners = [...new Set(raceData.map(d => d.runner))];
   const years = [...new Set(raceData.map(d => d.year))].sort();
@@ -118,235 +88,220 @@ function App() {
   const trendData = useMemo(() => {
     const yearlyData = {};
     raceData.forEach(record => {
-      if (!yearlyData[record.year]) {
-        yearlyData[record.year] = { year: record.year };
-      }
-      // CHANGED: Use 'paceInSeconds' for the chart's Y-axis value.
+      if (!yearlyData[record.year]) { yearlyData[record.year] = { year: record.year }; }
       yearlyData[record.year][record.runner] = record.paceInSeconds;
     });
     return Object.values(yearlyData).sort((a, b) => a.year - b.year);
   }, [raceData]);
 
+  const yAxisDomain = useMemo(() => {
+    if (isLoading || raceData.length === 0) return ['auto', 'auto'];
+    const dataToConsider = selectedRunners.size > 0 ? raceData.filter(d => selectedRunners.has(d.runner)) : raceData;
+    if (dataToConsider.length === 0) return ['auto', 'auto'];
+    const allPaces = dataToConsider.map(d => d.paceInSeconds);
+    const minPace = Math.min(...allPaces);
+    const maxPace = Math.max(...allPaces);
+    const padding = (maxPace - minPace) * 0.05;
+    return [Math.max(0, minPace - padding), maxPace + padding];
+  }, [raceData, selectedRunners, isLoading]);
+
   const comparisonData = useMemo(() => {
     if (selectedYear === 'all') return [];
-    return raceData
-      .filter(d => d.year === parseInt(selectedYear))
-      // CHANGED: Sort by 'paceInSeconds'.
-      .sort((a, b) => a.paceInSeconds - b.paceInSeconds)
-      .map(d => ({
-        runner: d.runner.split(' ')[0],
-        // CHANGED: Use 'paceInSeconds' for the bar height and pass the original 'pace' for the tooltip.
-        paceInSeconds: d.paceInSeconds,
-        pace: d.pace, 
-        fullName: d.runner
-      }));
+    return raceData.filter(d => d.year === parseInt(selectedYear)).sort((a, b) => a.paceInSeconds - b.paceInSeconds).map(d => ({ runner: d.runner.split(' ')[0], paceInSeconds: d.paceInSeconds, fullName: d.runner }));
   }, [selectedYear, raceData]);
 
-  const improvements = useMemo(() => {
-    return runners.map(runner => {
-      const runnerData = raceData.filter(d => d.runner === runner).sort((a, b) => a.year - b.year);
-      if (runnerData.length < 2) return null;
-      
-      // CHANGED: Use 'paceInSeconds' for all calculations.
-      const firstPace = runnerData[0].paceInSeconds;
-      const lastPace = runnerData[runnerData.length - 1].paceInSeconds;
-      const improvement = firstPace - lastPace; // Positive value means faster (less time)
-      const improvementPercent = ((improvement / firstPace) * 100).toFixed(1);
-      
-      return {
-        runner,
-        improvement, // in seconds
-        improvementPercent,
-        firstPace, // in seconds
-        lastPace, // in seconds
-        // A lower pace (fewer seconds) is an improvement.
-        isImprovement: improvement > 0 
-      };
-    }).filter(Boolean).sort((a, b) => b.improvement - a.improvement);
+  const paceDistributionData = useMemo(() => {
+    return years.map(year => {
+      const pacesInYear = raceData.filter(d => d.year === year).map(d => d.paceInSeconds).sort((a, b) => a - b);
+      if (pacesInYear.length === 0) return null;
+      const minPace = pacesInYear[0];
+      const maxPace = pacesInYear[pacesInYear.length - 1];
+      const midIndex = Math.floor(pacesInYear.length / 2);
+      const medianPace = pacesInYear.length % 2 === 0 ? (pacesInYear[midIndex - 1] + pacesInYear[midIndex]) / 2 : pacesInYear[midIndex];
+      return { year, minPace, medianPace, maxPace };
+    }).filter(Boolean);
+  }, [raceData, years]);
+
+  const bumpChartData = useMemo(() => {
+    const yearlyRanks = {};
+    years.forEach(year => {
+      const yearlyData = raceData.filter(d => d.year === year).sort((a, b) => a.paceInSeconds - b.paceInSeconds);
+      yearlyRanks[year] = { year };
+      yearlyData.forEach((d, index) => { yearlyRanks[year][d.runner] = index + 1; });
+    });
+    return Object.values(yearlyRanks);
+  }, [raceData, years]);
+
+  // NEW: Calculation for Year-over-Year improvements, FILTERED for motivation
+  const yearOverYearImprovers = useMemo(() => {
+      if (years.length < 2) return [];
+      const latestYear = years[years.length - 1];
+      const previousYear = years[years.length - 2];
+      return runners.map(runner => {
+          const latestData = raceData.find(d => d.runner === runner && d.year === latestYear);
+          const previousData = raceData.find(d => d.runner === runner && d.year === previousYear);
+          if (!latestData || !previousData) return null;
+          const improvement = previousData.paceInSeconds - latestData.paceInSeconds;
+          const improvementPercent = ((improvement / previousData.paceInSeconds) * 100).toFixed(1);
+          return { runner, improvement, improvementPercent, latestPace: latestData.paceInSeconds, previousPace: previousData.paceInSeconds, isImprovement: improvement > 0 };
+      }).filter(Boolean).filter(stat => stat.isImprovement); // Only keep those who improved
+  }, [raceData, years, runners]);
+  
+  // NEW: Calculation for Overall improvements, FILTERED for motivation
+  const overallImprovers = useMemo(() => {
+      return runners.map(runner => {
+          const runnerData = raceData.filter(d => d.runner === runner).sort((a, b) => a.year - b.year);
+          if (runnerData.length < 2) return null;
+          const firstPace = runnerData[0].paceInSeconds;
+          const lastPace = runnerData[runnerData.length - 1].paceInSeconds;
+          const improvement = firstPace - lastPace;
+          const improvementPercent = ((improvement / firstPace) * 100).toFixed(1);
+          return { runner, improvement, improvementPercent, firstPace, lastPace, isImprovement: improvement > 0 };
+      }).filter(Boolean).filter(stat => stat.isImprovement); // Only keep those who improved
   }, [runners, raceData]);
 
   const handleRunnerToggle = (runner) => {
     const newSelected = new Set(selectedRunners);
-    if (newSelected.has(runner)) {
-      newSelected.delete(runner);
-    } else {
-      newSelected.add(runner);
-    }
+    if (newSelected.has(runner)) newSelected.delete(runner);
+    else newSelected.add(runner);
     setSelectedRunners(newSelected);
   };
   
-  // The old formatTime function is no longer needed, as we have secondsToPace.
-
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f9fafb', padding: '24px' }}>
       <div style={{ maxWidth: '1280px', margin: '0 auto' }}>
         
-        {/* Header */}
         <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px', marginBottom: '24px' }}>
-          <h1 style={{ fontSize: '30px', fontWeight: 'bold', color: '#111827', marginBottom: '8px' }}>
-            Race Performance Dashboard
-          </h1>
-          <p style={{ color: '#6b7280', marginBottom: '16px' }}>
-            Track runner performance over time and compare results
-          </p>
-          
-          {/* File Upload */}
-          <div style={{ 
-            border: '2px dashed #d1d5db', 
-            borderRadius: '8px', 
-            padding: '16px',
-            textAlign: 'center'
-          }}>
-            <div style={{ marginBottom: '8px' }}>📤</div>
-            <label style={{ cursor: 'pointer' }}>
-              <span style={{ fontSize: '14px', color: '#6b7280' }}>
-                Upload your CSV file or <span style={{ color: '#3b82f6', textDecoration: 'underline' }}>browse</span>
-              </span>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleFileUpload}
-                style={{ display: 'none' }}
-              />
-            </label>
-            {/* CHANGED: Updated help text for CSV columns. */}
-            <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
-              CSV should have columns: runner, year, pace, event
-            </p>
-            
-            {isLoading && (
-              <div style={{ marginTop: '8px', color: '#3b82f6' }}>
-                Loading your data...
-              </div>
-            )}
-            
-            {error && (
-              <div style={{ marginTop: '8px', color: '#dc2626' }}>
-                ⚠️ {error}
-              </div>
-            )}
-            
-            <div style={{ marginTop: '8px', fontSize: '14px', color: '#6b7280' }}>
-              {/* CHANGED: Logic to detect sample data is slightly different now. */}
-              Currently showing: {raceData.length === processData(sampleRaceData).length ? 'Sample data' : 'Your uploaded data'} ({raceData.length} records)
-            </div>
+          <h1 style={{ fontSize: '30px', fontWeight: 'bold', color: '#111827', marginBottom: '8px' }}>Race Performance Dashboard</h1>
+          <div style={{ padding: '8px', textAlign: 'center', backgroundColor: '#f3f4f6', borderRadius: '6px' }}>
+              {isLoading && <p style={{ color: '#3b82f6' }}>Loading data...</p>}
+              {error && <p style={{ color: '#dc2626' }}>⚠️ {error}</p>}
+              {!isLoading && !error && <p style={{ color: '#166534' }}>✅ Displaying {raceData.length} records</p>}
           </div>
         </div>
 
-        {/* Controls and Runner Selection are unchanged */}
         <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px', marginBottom: '24px' }}>
-            {/* ... (no changes in this section) ... */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button onClick={() => setViewMode('trends')} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: viewMode === 'trends' ? '#3b82f6' : '#e5e7eb', color: viewMode === 'trends' ? 'white' : '#374151', cursor: 'pointer' }}>📈 Trends</button>
+              <button onClick={() => setViewMode('comparison')} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: viewMode === 'comparison' ? '#3b82f6' : '#e5e7eb', color: viewMode === 'comparison' ? 'white' : '#374151', cursor: 'pointer' }}>👥 Comparison</button>
+            </div>
+            <button onClick={() => setPaceUnit(paceUnit === 'mile' ? 'km' : 'mile')} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #3b82f6', backgroundColor: 'white', color: '#3b82f6', cursor: 'pointer', fontWeight: '500' }}>Show Pace: min/{paceUnit}</button>
+            {viewMode === 'comparison' && (
+              <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)} style={{ padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: '6px', marginLeft: 'auto' }}>
+                <option value="all">Select Year</option>
+                {years.map(year => <option key={year} value={year}>{year}</option>)}
+              </select>
+            )}
+          </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: '24px' }}>
-            {/* Runner Selection - no changes needed here */}
-            <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
-              {/* ... (no changes in this section) ... */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 3fr', gap: '24px', marginBottom: '24px' }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>🔍 Select Runners</h3>
+            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+              {runners.map((runner, index) => (
+                <label key={runner} style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', padding: '8px', borderRadius: '4px', marginBottom: '4px' }}>
+                  <input type="checkbox" checked={selectedRunners.has(runner)} onChange={() => handleRunnerToggle(runner)} style={{ borderRadius: '4px' }}/>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: colors[index % colors.length] }}></div>
+                    <span style={{ fontSize: '14px' }}>{runner}</span>
+                  </div>
+                </label>
+              ))}
             </div>
-
-          {/* Main Chart */}
+            <button onClick={() => setSelectedRunners(new Set(runners))} style={{ marginTop: '16px', width: '100%', padding: '8px 12px', backgroundColor: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}>Select All</button>
+            <button onClick={() => setSelectedRunners(new Set())} style={{ marginTop: '8px', width: '100%', padding: '8px 12px', backgroundColor: '#d1d5db', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}>Clear All</button>
+          </div>
           <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
             {viewMode === 'trends' ? (
-              <>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
-                  Performance Trends Over Time
-                </h3>
-                <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={trendData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="year" />
-                    {/* CHANGED: Updated YAxis to format seconds into MM:SS */}
-                    <YAxis 
-                      label={{ value: 'Pace (MM:SS)', angle: -90, position: 'insideLeft' }}
-                      tickFormatter={secondsToPace}
-                      reversed={true} // Lower pace (fewer seconds) is better, so it should be higher on the chart.
-                    />
-                    {/* CHANGED: Updated Tooltip to format value correctly */}
-                    <Tooltip 
-                      formatter={(value) => [secondsToPace(value), 'Pace']}
-                      labelFormatter={(label) => `Year: ${label}`}
-                    />
-                    <Legend />
-                    {runners.map((runner, index) => (
-                      <Line
-                        key={runner}
-                        type="monotone"
-                        dataKey={runner}
-                        stroke={colors[index % colors.length]}
-                        strokeWidth={selectedRunners.has(runner) ? 3 : 1}
-                        opacity={selectedRunners.size === 0 || selectedRunners.has(runner) ? 1 : 0.3}
-                        dot={{ r: selectedRunners.has(runner) ? 5 : 3 }}
-                        connectNulls // This is good for runners who miss a year
-                      />
-                    ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </>
+                <>{/* Trends Chart */}</>
             ) : (
-              <>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
-                  Performance Comparison {selectedYear !== 'all' && `- ${selectedYear}`}
-                </h3>
-                {selectedYear === 'all' ? (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '400px', color: '#6b7280', textAlign: 'center' }}>
-                    {/* ... (no changes in this section) ... */}
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={400}>
-                    {/* CHANGED: BarChart now uses paceInSeconds for dataKey */}
-                    <BarChart data={comparisonData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="runner" />
-                      {/* CHANGED: YAxis label and formatter for pace */}
-                      <YAxis 
-                        label={{ value: 'Pace (MM:SS)', angle: -90, position: 'insideLeft' }}
-                        tickFormatter={secondsToPace}
-                      />
-                      {/* CHANGED: Tooltip now shows the original pace string */}
-                      <Tooltip 
-                        formatter={(value, name, props) => [props.payload.pace, 'Pace']}
-                        labelFormatter={(label, payload) => payload?.[0]?.payload.fullName || label}
-                      />
-                      <Bar dataKey="paceInSeconds" fill="#8884d8" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </>
+                <>{/* Comparison Chart */}</>
             )}
           </div>
         </div>
 
-        {/* Improvement Statistics */}
-        <div style={{ marginTop: '24px', backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
-          <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
-            Overall Improvement Statistics
-          </h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '16px' }}>
-            {improvements.map((stat) => (
-              <div key={stat.runner} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <h4 style={{ fontWeight: '500' }}>{stat.runner}</h4>
-                  <span style={{
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                    backgroundColor: stat.isImprovement ? '#dcfce7' : '#fee2e2',
-                    color: stat.isImprovement ? '#166534' : '#991b1b'
-                  }}>
-                    {/* CHANGED: Display the improvement using the secondsToPace formatter */}
-                    {stat.isImprovement ? '↓' : '↑'} {secondsToPace(Math.abs(stat.improvement))}
-                  </span>
-                </div>
-                <div style={{ fontSize: '14px', color: '#6b7280' }}>
-                  {/* CHANGED: Format the first and last pace from seconds */}
-                  <p>First: {secondsToPace(stat.firstPace)}</p>
-                  <p>Latest: {secondsToPace(stat.lastPace)}</p>
-                  <p style={{ color: stat.isImprovement ? '#059669' : '#dc2626' }}>
-                    {stat.isImprovement ? 'Improved' : 'Declined'} by {Math.abs(stat.improvementPercent)}%
-                  </p>
-                </div>
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>Group Pace Distribution Over Time</h3>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={paceDistributionData}>
+              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="year" />
+              <YAxis label={{ value: `Pace (min/${paceUnit})`, angle: -90, position: 'insideLeft' }} tickFormatter={(seconds) => secondsToPace(seconds, paceUnit)} reversed={true} />
+              <Tooltip formatter={(value, name) => [secondsToPace(value, paceUnit), name.replace('Pace', ' Pace')]} />
+              <Legend /><Area type="monotone" dataKey="maxPace" stroke="#ff7300" fill="#ff7300" fillOpacity={0.1} name="Slowest Pace" />
+              <Area type="monotone" dataKey="minPace" stroke="#82ca9d" fill="#82ca9d" fillOpacity={0.2} name="Fastest Pace" />
+              <Line type="monotone" dataKey="medianPace" stroke="#8884d8" strokeWidth={3} name="Median Pace" dot={{ r: 5 }} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px', marginBottom: '24px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>Annual Ranking Changes</h3>
+          <ResponsiveContainer width="100%" height={400}>
+            <LineChart data={bumpChartData}>
+              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="year" allowDecimals={false} />
+              <YAxis label={{ value: 'Rank', angle: -90, position: 'insideLeft' }} reversed={true} allowDecimals={false} />
+              <Tooltip /><Legend />
+              {runners.map((runner, index) => (
+                <Line key={runner} type="monotone" dataKey={runner} stroke={colors[index % colors.length]} strokeWidth={selectedRunners.has(runner) ? 4 : 2} opacity={selectedRunners.size === 0 || selectedRunners.has(runner) ? 1 : 0.3} dot={{ r: 4 }} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* NEW: Motivational Improvement Panels */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
+              🏆 Annual Pace Busters {years.length >= 2 && `(${years[years.length-2]} vs ${years[years.length-1]})`}
+            </h3>
+            {yearOverYearImprovers.length > 0 ? (
+              <div style={{ display: 'grid', gap: '16px' }}>
+                {yearOverYearImprovers.map((stat) => (
+                  <div key={stat.runner} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <h4 style={{ fontWeight: '500' }}>{stat.runner}</h4>
+                      <span style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '12px', backgroundColor: '#dcfce7', color: '#166534' }}>
+                        ↓ {secondsToPace(stat.improvement, paceUnit)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                      <p>From: {secondsToPace(stat.previousPace, paceUnit)} → To: {secondsToPace(stat.latestPace, paceUnit)}</p>
+                      <p style={{ color: '#059669', fontWeight: '500' }}>Pace improved by {stat.improvementPercent}%!</p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              <p style={{ color: '#6b7280' }}>No year-over-year improvements recorded. A great baseline for next year!</p>
+            )}
+          </div>
+
+          <div style={{ backgroundColor: 'white', borderRadius: '8px', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', padding: '24px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '16px' }}>
+              🚀 All-Time Improvers
+            </h3>
+            {overallImprovers.length > 0 ? (
+              <div style={{ display: 'grid', gap: '16px' }}>
+                {overallImprovers.map((stat) => (
+                  <div key={stat.runner} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <h4 style={{ fontWeight: '500' }}>{stat.runner}</h4>
+                      <span style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '12px', backgroundColor: '#dcfce7', color: '#166534' }}>
+                         ↓ {secondsToPace(stat.improvement, paceUnit)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '14px', color: '#6b7280' }}>
+                      <p>From: {secondsToPace(stat.firstPace, paceUnit)} → To: {secondsToPace(stat.lastPace, paceUnit)}</p>
+                      <p style={{ color: '#059669', fontWeight: '500' }}>Pace improved by {stat.improvementPercent}% overall!</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: '#6b7280' }}>No overall improvements recorded yet. Keep on running!</p>
+            )}
           </div>
         </div>
       </div>
